@@ -1,0 +1,103 @@
+# =========================
+
+# Build files
+
+# =========================
+
+*.o
+*.out
+*.a
+*.so
+*.exe
+
+# Executables (from your project)
+
+flexql_server
+flexql_repl
+flexql_benchmark
+smoke_test
+
+# CMake / Make build directories
+
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+Makefile
+
+# =========================
+
+# Debug / Logs
+
+# =========================
+
+*.log
+*.tmp
+*.swp
+*.swo
+*.stackdump
+
+# =========================
+
+# OS files
+
+# =========================
+
+.DS_Store
+Thumbs.db
+
+# =========================
+
+# IDE / Editor files
+
+# =========================
+
+# VS Code
+
+.vscode/
+
+# CLion / JetBrains
+
+.idea/
+
+# Vim
+
+*.swp
+
+# =========================
+
+# Environment / Config
+
+# =========================
+
+.env
+
+# =========================
+
+# Test / Benchmark outputs
+
+# =========================
+
+benchmark_results/
+output/
+results/
+
+# =========================
+
+# Coverage / profiling
+
+# =========================
+
+*.gcda
+*.gcno
+*.gcov
+gmon.out
+
+# =========================
+
+# Misc
+
+# =========================
+
+*.bak
+*~
