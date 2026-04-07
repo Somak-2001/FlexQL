@@ -665,6 +665,26 @@ QueryResult Engine::execute_select(const SelectStatement &stmt, const std::strin
         return row;
     };
 
+    if (right_table == nullptr &&
+        bound_where.active &&
+        !bound_where.left_from_right &&
+        !bound_where.right_is_column &&
+        bound_where.op == CompareOp::Eq &&
+        left_table.primary_key_index >= 0 &&
+        bound_where.left_index == static_cast<std::size_t>(left_table.primary_key_index)) {
+        auto found = left_table.primary_index.find(bound_where.right_literal);
+        if (found != left_table.primary_index.end()) {
+            const Row &row = left_table.rows[found->second];
+            if (!row.deleted) {
+                result.rows.push_back(emit_row(row, nullptr));
+            }
+            if (result.message.empty()) {
+                result.message = std::to_string(result.rows.size()) + " row(s)";
+            }
+            return result;
+        }
+    }
+
     for (const Row &left_row : left_table.rows) {
         if (left_row.deleted) {
             continue;

@@ -64,7 +64,7 @@ FlexQL stores durable state inside `flexql_data/`.
 - `tables/*.rows`: checkpointed table rows
 - `wal.log`: write-ahead log
 
-Every `CREATE TABLE` and `INSERT` statement is first appended to the WAL and synced to disk. After that, the in-memory state is updated and checkpointed back to the catalog and table snapshot files. On restart, FlexQL reloads the snapshots and replays any newer WAL entries that were not checkpointed yet.
+Every `CREATE TABLE` and `INSERT` statement is first appended to the WAL and synced to disk. After that, the in-memory working set is updated and dirty catalog/table snapshots are checkpointed to disk. On restart, FlexQL reloads the snapshots and replays any newer WAL entries that were not checkpointed yet, so disk remains the durable source of truth and RAM is only used to speed up active queries and inserts.
 
 ## Build
 
@@ -168,10 +168,10 @@ Run the professor benchmark unit tests:
 
 ## Notes
 
-- The durable source of truth is on disk, not only in RAM.
+- The durable source of truth is on disk, not RAM.
 - RAM is used for active tables, indexes, and cache.
 - Batch insert support is included for better benchmark performance.
-- The current durability design checkpoints after each mutating statement, which is simpler and safer but slower than a more advanced database design.
+- The durability design syncs each mutating statement to the WAL and checkpoints dirty snapshots in batches, trading faster writes for potentially longer WAL replay after a crash.
 - TTL rows are persisted with their absolute expiration timestamp and are removed lazily on later access.
 
 ## Submission Files
