@@ -15,7 +15,14 @@
 flexql_server
 flexql_repl
 flexql_benchmark
+flexql_repl_dbg
 smoke_test
+persistence_test
+server
+server_bin
+benchmark
+benchmark_bin
+benchmark_embedded_bin
 
 # CMake / Make build directories
 
@@ -23,7 +30,6 @@ build/
 cmake-build-*/
 CMakeFiles/
 CMakeCache.txt
-Makefile
 
 # =========================
 
@@ -81,6 +87,7 @@ Thumbs.db
 benchmark_results/
 output/
 results/
+flexql_data/
 
 # =========================
 
