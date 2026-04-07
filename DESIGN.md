@@ -181,22 +181,37 @@ make
 
 ## Execution Instructions
 
-Start the server:
+Benchmark workflow, Terminal 1:
 
 ```bash
-./flexql_server 9000
+sh compile.sh
+./server
 ```
 
-Start the REPL:
+Benchmark workflow, Terminal 2:
+
+```bash
+./benchmark --unit-test
+./benchmark 1000
+```
+
+Manual REPL workflow, Terminal 1:
+
+```bash
+make flexql_repl
+./server
+```
+
+Manual REPL workflow, Terminal 2:
 
 ```bash
 ./flexql_repl 127.0.0.1 9000
 ```
 
-Run the benchmark:
+Exit the REPL with:
 
-```bash
-./flexql_benchmark 127.0.0.1 9000 10000
+```text
+.exit
 ```
 
 ## Verification
