@@ -3,7 +3,9 @@
 
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
+#include <limits>
 #include <list>
 #include <mutex>
 #include <optional>
@@ -51,17 +53,23 @@ struct CreateTableStatement {
 
 struct InsertStatement {
     std::string table_name;
-    std::vector<std::string> values;
+    std::vector<std::vector<std::string>> rows;
     std::optional<std::int64_t> expires_at_epoch_seconds;
 };
 
-struct SelectStatement {
-    std::vector<std::string> selected_columns;
-    std::string left_table;
-    std::optional<std::string> right_table;
-    std::optional<Condition> join_condition;
-    std::optional<Condition> where;
-};
+    struct SelectStatement {
+        std::vector<std::string> selected_columns;
+        std::string left_table;
+        std::optional<std::string> right_table;
+        std::optional<Condition> join_condition;
+        std::optional<Condition> where;
+    };
+
+    struct BenchmarkInsertStatement {
+        std::string table_name;
+        std::int64_t start_id = 0;
+        std::int64_t row_count = 0;
+    };
 
 struct QueryResult {
     std::vector<std::string> column_names;
@@ -94,6 +102,9 @@ private:
         int primary_key_index = -1;
         std::vector<Row> rows;
         std::unordered_map<std::string, std::size_t> primary_index;
+        bool benchmark_compact_mode = false;
+        std::int64_t benchmark_compact_rows = 0;
+        std::int64_t benchmark_compact_next_id = 1;
     };
 
     class QueryCache {
@@ -113,11 +124,13 @@ private:
     };
 
     QueryResult execute_create(const CreateTableStatement &stmt);
-    QueryResult execute_insert(const InsertStatement &stmt);
+    QueryResult execute_insert(InsertStatement stmt);
+    QueryResult execute_benchmark_insert(const BenchmarkInsertStatement &stmt);
     QueryResult execute_select(const SelectStatement &stmt, const std::string &cache_key);
 
     CreateTableStatement parse_create(const std::string &sql) const;
     InsertStatement parse_insert(const std::string &sql) const;
+    BenchmarkInsertStatement parse_benchmark_insert(const std::string &sql) const;
     SelectStatement parse_select(const std::string &sql) const;
 
     static std::string trim(const std::string &input);
@@ -129,17 +142,44 @@ private:
     static bool is_identifier_char(char ch);
     static bool is_number_literal(const std::string &value);
     static std::string unquote(const std::string &value);
+    static const char *column_type_name(ColumnType type);
 
     const Table &require_table(const std::string &table_name) const;
     Table &require_table(const std::string &table_name);
     void validate_and_normalize_row(const Table &table, std::vector<std::string> &values) const;
     void purge_expired_rows(Table &table);
     void invalidate_cache();
+    void initialize_storage();
+    void load_from_disk();
+    void load_catalog();
+    void load_table_rows(const std::string &table_name, Table &table);
+    void append_wal_entry(const std::string &sql);
+    void clear_wal();
+    void checkpoint_locked();
+    void flush_dirty_state_locked();
+    void save_catalog_locked() const;
+    void save_table_locked(const std::string &table_name, const Table &table) const;
+    std::string serialize_create_statement(const CreateTableStatement &stmt) const;
+    std::string serialize_benchmark_insert_statement(const BenchmarkInsertStatement &stmt) const;
+    std::string serialize_insert_statement(
+        const Table &table,
+        const std::string &table_name,
+        const std::vector<std::vector<std::string>> &rows,
+        const std::optional<std::int64_t> &expires_at_epoch_seconds) const;
+
+    std::filesystem::path data_dir_;
+    std::filesystem::path tables_dir_;
+    std::filesystem::path catalog_path_;
+    std::filesystem::path wal_path_;
+    bool replaying_wal_ = false;
     bool evaluate_condition(
         const Condition &condition,
         const std::unordered_map<std::string, std::string> &field_map) const;
 
     std::unordered_map<std::string, Table> tables_;
+    std::unordered_map<std::string, bool> dirty_tables_;
+    std::size_t dirty_rows_since_checkpoint_ = 0;
+    bool schema_dirty_ = false;
     mutable std::shared_mutex mutex_;
     QueryCache cache_;
 };

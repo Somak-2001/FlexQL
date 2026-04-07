@@ -48,10 +48,8 @@ FlexQL is a simplified SQL-like database driver written in C++ for the Design La
 
 ### Supported Types
 
-- `INT`
 - `DECIMAL`
 - `VARCHAR`
-- `DATETIME`
 
 ### Expiration Support
 
@@ -65,9 +63,8 @@ FlexQL stores durable state inside `flexql_data/`.
 - `catalog.txt`: schema metadata
 - `tables/*.rows`: checkpointed table rows
 - `wal.log`: write-ahead log
-- `version.txt`: last checkpointed transaction id
 
-Every mutating statement is first written to the WAL and synced to disk. After that, the in-memory state is updated and checkpointed back to the persistent table files. On restart, FlexQL reloads snapshots and replays any newer WAL entries.
+Every `CREATE TABLE` and `INSERT` statement is first appended to the WAL and synced to disk. After that, the in-memory state is updated and checkpointed back to the catalog and table snapshot files. On restart, FlexQL reloads the snapshots and replays any newer WAL entries that were not checkpointed yet.
 
 ## Build
 
@@ -159,6 +156,7 @@ Run the basic feature test:
 Run the persistence test:
 
 ```bash
+g++ -std=c++17 -O2 -Wall -Wextra -pedantic persistence_test.cpp engine.cpp -o persistence_test
 ./persistence_test
 ```
 
@@ -174,6 +172,7 @@ Run the professor benchmark unit tests:
 - RAM is used for active tables, indexes, and cache.
 - Batch insert support is included for better benchmark performance.
 - The current durability design checkpoints after each mutating statement, which is simpler and safer but slower than a more advanced database design.
+- TTL rows are persisted with their absolute expiration timestamp and are removed lazily on later access.
 
 ## Submission Files
 
