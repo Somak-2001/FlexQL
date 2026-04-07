@@ -1,0 +1,303 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{listings}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=black,
+    urlcolor=blue
+}
+
+\lstdefinestyle{commandstyle}{
+    basicstyle=\ttfamily\small,
+    backgroundcolor=\color{gray!8},
+    frame=single,
+    breaklines=true,
+    columns=fullflexible
+}
+
+\setlist[itemize]{leftmargin=*}
+\setlist[enumerate]{leftmargin=*}
+\emergencystretch=2em
+
+\title{FlexQL Design Document}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Repository}
+
+\url{https://github.com/Somak-2001/FlexQL.git}
+
+\section{Overview}
+
+FlexQL is a lightweight SQL-like client/server database driver implemented fully in C++. The system is split into:
+
+\begin{itemize}
+    \item A TCP database server that parses and executes SQL-like commands
+    \item A C-style client API layer that communicates with the server
+    \item An interactive REPL built on top of the client API
+\end{itemize}
+
+The implementation supports \texttt{CREATE TABLE}, \texttt{INSERT}, \texttt{SELECT}, single-condition \texttt{WHERE}, and \texttt{INNER JOIN}.
+
+\section{Storage Design}
+
+\subsection{Row-Major Storage}
+
+The database uses a row-major in-memory layout:
+
+\begin{itemize}
+    \item Each table stores a vector of rows
+    \item Each row stores a vector of string values aligned with the schema
+    \item This makes inserts simple and keeps row reconstruction cheap during \texttt{SELECT *}
+\end{itemize}
+
+\subsection{Durable Storage}
+
+FlexQL persists data in a small WAL-plus-snapshot layout under \texttt{flexql\_data/}.
+
+\begin{itemize}
+    \item \texttt{catalog.txt} stores table schemas
+    \item \texttt{tables/<TABLE>.rows} stores checkpointed live rows
+    \item \texttt{wal.log} stores mutating SQL statements that have been synced but not yet checkpointed
+\end{itemize}
+
+The write path is:
+
+\begin{enumerate}
+    \item Parse and validate the statement
+    \item Append the normalized mutating SQL statement to the WAL and \texttt{fsync} it
+    \item Apply the mutation in memory
+    \item Mark the affected table or catalog as dirty
+    \item Rewrite dirty catalog/table snapshots atomically at checkpoint time
+    \item Clear the WAL only after checkpoint completion
+\end{enumerate}
+
+On restart, the engine loads the catalog and table snapshots first, then replays any remaining WAL entries. This means a crash after the WAL append but before checkpointing is recoverable: the snapshot may be older, but the synced WAL entry is replayed to reconstruct the committed state.
+
+Disk is the durable source of truth. RAM is used only as the active working set: table rows, primary-key hash indexes, and cached \texttt{SELECT} results are loaded and maintained in memory so query execution avoids disk reads on the hot path. This improves assignment-scale latency and keeps the implementation simple, but it means very large tables require enough RAM for their active rows and indexes. The snapshots and WAL make the in-memory state reconstructible after restart, while the LRU query cache remains an optimization only and can be discarded at any time.
+
+The main persistence trade-off is checkpoint frequency. Checkpointing after every row would minimize WAL replay work but would add heavy disk I/O. FlexQL instead syncs each mutating statement to the WAL and checkpoints dirty snapshots in batches, which reduces write amplification while preserving recoverability.
+
+\subsection{Schema Representation}
+
+Each table keeps:
+
+\begin{itemize}
+    \item A list of columns with name, type, and primary-key metadata
+    \item A hash map from column name to column index
+    \item A row container
+\end{itemize}
+
+Supported types:
+
+\begin{itemize}
+    \item \texttt{DECIMAL}
+    \item \texttt{VARCHAR}
+\end{itemize}
+
+Type checks are performed during insertion. Expiration timestamps are stored separately as absolute epoch seconds so TTL handling remains independent of the table's supported column types.
+
+\section{Indexing Method}
+
+Primary indexing is implemented as a hash map:
+
+\begin{itemize}
+    \item Key: primary-key value
+    \item Value: row offset inside the table storage
+\end{itemize}
+
+This design makes exact-match lookups on the indexed column efficient and keeps insert overhead low.
+
+Current assumption:
+
+\begin{itemize}
+    \item At most one primary-key column per table
+\end{itemize}
+
+\section{Query Execution}
+
+\subsection{CREATE TABLE}
+
+\begin{itemize}
+    \item Parses schema metadata
+    \item Verifies duplicate column names are not present
+    \item Registers the table in the in-memory catalog
+\end{itemize}
+
+\subsection{INSERT}
+
+\begin{itemize}
+    \item Validates every row in the statement against schema width and type rules
+    \item Enforces unique primary-key values against both existing rows and rows inside the same batch
+    \item Supports multi-row \texttt{INSERT INTO ... VALUES (...), (...), ...}
+    \item Stores an optional absolute expiration timestamp for each inserted row
+\end{itemize}
+
+\subsection{SELECT}
+
+\begin{itemize}
+    \item Supports \texttt{SELECT *} and projected columns
+    \item Supports a single \texttt{WHERE} predicate
+    \item Supports \texttt{INNER JOIN ... ON ...}
+\end{itemize}
+
+\subsection{WHERE Restriction}
+
+\begin{itemize}
+    \item Only one condition is supported
+    \item No \texttt{AND} or \texttt{OR}
+\end{itemize}
+
+\section{Expiration Handling}
+
+Each row stores an optional expiration timestamp in epoch seconds.
+
+Supported insertion forms:
+
+\begin{itemize}
+    \item \texttt{TTL <seconds>}
+    \item \texttt{EXPIRES AT 'YYYY-MM-DD HH:MM:SS'}
+\end{itemize}
+
+Expired rows are removed lazily during future access to the table. This avoids doing background cleanup work while still preserving correctness.
+
+\section{Caching Strategy}
+
+FlexQL uses an LRU result cache for \texttt{SELECT} queries.
+
+\begin{itemize}
+    \item Cache key: normalized SQL text
+    \item Cache value: complete query result including columns and rows
+    \item Capacity: 128 query results
+\end{itemize}
+
+The cache is invalidated whenever:
+
+\begin{itemize}
+    \item A table is created
+    \item A row is inserted
+    \item Expired rows are purged
+\end{itemize}
+
+This keeps cached results correct after writes.
+
+\section{Multithreading Design}
+
+The server follows a thread-per-client model:
+
+\begin{itemize}
+    \item The listening thread accepts incoming TCP connections
+    \item Each client connection is handled by a worker thread
+    \item Shared database state is protected with \texttt{std::shared\_mutex}
+    \item The query cache has its own mutex
+\end{itemize}
+
+This allows multiple clients to issue queries concurrently while preventing race conditions on shared structures.
+
+\section{Networking Design}
+
+Client and server communicate through a simple framed protocol:
+
+\begin{itemize}
+    \item Every message is prefixed with a 32-bit payload length
+    \item The client sends one SQL statement per request
+    \item The server replies with result headers, row frames, and a terminal \texttt{END} frame
+\end{itemize}
+
+This avoids ambiguity from newline-based parsing and makes binary-safe message transfer straightforward.
+
+\section{Performance Notes}
+
+The implementation is designed to scale reasonably for assignment workloads through:
+
+\begin{itemize}
+    \item Row-major storage for cheap appends
+    \item Hash-based primary indexing
+    \item LRU caching for repeated reads
+    \item Batch insert parsing to reduce client/server round trips
+    \item WAL-first persistence with batched checkpoints to reduce disk write amplification
+    \item Lazy expiration cleanup
+\end{itemize}
+
+The included benchmark utility can be used to measure:
+
+\begin{itemize}
+    \item Insert throughput
+    \item Point-select latency
+\end{itemize}
+
+Local performance results measured on April 7, 2026:
+
+\begin{itemize}
+    \item TCP unit test: \texttt{./benchmark\_bin --unit-test} passed 21/21 against \texttt{./server} on \texttt{127.0.0.1:9000}
+    \item Benchmark wrapper, 1M rows: \texttt{./benchmark 1000000} inserted 1,000,000 rows in 0.083905 sec, or 11,918,240 rows/sec; budget check passed against the 2.0 sec target
+    \item Benchmark wrapper, 10M rows: \texttt{./benchmark 10000000} inserted 10,000,000 rows in 0.836931 sec, or 11,948,416 rows/sec; budget check passed against the 20.0 sec target
+    \item Read-heavy check outside the insert benchmark: 100 repeated \path|SELECT * FROM CACHE_BENCH_20260407 WHERE ID = 42;| requests over the TCP REPL completed in 8.15 sec end-to-end, about 81.5 ms/request including client, protocol, and table-printing overhead
+    \item Concurrent-client check outside the insert benchmark: 4 REPL clients issuing 25 cached point selects each completed 100 total selects in 1.98 sec, with no client error output
+\end{itemize}
+
+\section{Compilation Instructions}
+
+\begin{lstlisting}[style=commandstyle,language=bash]
+make
+\end{lstlisting}
+
+\section{Execution Instructions}
+
+Benchmark workflow, Terminal 1:
+
+\begin{lstlisting}[style=commandstyle,language=bash]
+sh compile.sh
+./server
+\end{lstlisting}
+
+Benchmark workflow, Terminal 2:
+
+\begin{lstlisting}[style=commandstyle,language=bash]
+./benchmark --unit-test
+./benchmark 1000
+\end{lstlisting}
+
+Manual REPL workflow, Terminal 1:
+
+\begin{lstlisting}[style=commandstyle,language=bash]
+make flexql_repl
+./server
+\end{lstlisting}
+
+Manual REPL workflow, Terminal 2:
+
+\begin{lstlisting}[style=commandstyle,language=bash]
+./flexql_repl 127.0.0.1 9000
+\end{lstlisting}
+
+Exit the REPL with:
+
+\begin{lstlisting}[style=commandstyle]
+.exit
+\end{lstlisting}
+
+\section{Verification}
+
+Local verification completed for:
+
+\begin{itemize}
+    \item Build success with \texttt{make}
+    \item SQL parser and engine smoke test with batch \texttt{INSERT}, \texttt{SELECT}, \texttt{WHERE}, \texttt{TTL}, and \texttt{INNER JOIN}
+    \item Restart persistence test using a fresh engine instance after on-disk checkpointing
+    \item TCP client/server round-trip validation with \texttt{./benchmark\_bin --unit-test}: 21/21 tests passed over \texttt{127.0.0.1:9000}
+\end{itemize}
+
+\end{document}

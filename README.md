@@ -103,6 +103,33 @@ Terminal 2:
 ./benchmark 1000
 ```
 
+If the benchmark fails with `table already exists: BIG_USERS`, an old server or old persisted data is still present. Without code changes, use a fresh data directory or stop the old server and delete its persisted data:
+
+```bash
+pkill -f server_bin
+rm -rf flexql_data
+./server
+```
+
+Then run the benchmark again from another terminal:
+
+```bash
+./benchmark 1000000
+```
+
+If you do not want to delete all persisted data, run the server with a temporary clean data directory:
+
+```bash
+pkill -f server_bin
+FLEXQL_DATA_DIR=/tmp/flexql-clean ./server
+```
+
+Then run the benchmark binary from another terminal:
+
+```bash
+./benchmark_bin 1000000
+```
+
 ### Manual REPL Workflow
 
 Terminal 1:
