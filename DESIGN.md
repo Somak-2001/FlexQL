@@ -175,20 +175,28 @@ Local performance results measured on April 7, 2026:
 
 ## Compilation Instructions
 
+Normal local development binaries are built with `make`. This produces `./flexql_server`, `./flexql_repl`, `./flexql_benchmark`, and `./smoke_test`.
+
 ```bash
 make
 ```
 
+The professor benchmark wrapper workflow uses `sh compile.sh` instead. That script builds the benchmark-compatible binaries and wrapper commands named `./server` and `./benchmark`.
+
+```bash
+sh compile.sh
+```
+
 ## Execution Instructions
 
-Benchmark workflow, Terminal 1:
+Professor benchmark wrapper workflow, Terminal 1:
 
 ```bash
 sh compile.sh
 ./server
 ```
 
-Benchmark workflow, Terminal 2:
+Professor benchmark wrapper workflow, Terminal 2:
 
 ```bash
 ./benchmark --unit-test
@@ -198,8 +206,8 @@ Benchmark workflow, Terminal 2:
 Manual REPL workflow, Terminal 1:
 
 ```bash
-make flexql_repl
-./server
+make flexql_server flexql_repl
+./flexql_server
 ```
 
 Manual REPL workflow, Terminal 2:

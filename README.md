@@ -68,13 +68,15 @@ Every `CREATE TABLE` and `INSERT` statement is first appended to the WAL and syn
 
 ## Build
 
-Build everything:
+Build the normal local development binaries:
 
 ```bash
 make
 ```
 
-Build the professor benchmark workflow binaries:
+This produces `./flexql_server`, `./flexql_repl`, `./flexql_benchmark`, and `./smoke_test`.
+
+Build the professor benchmark wrapper workflow binaries:
 
 ```bash
 sh compile.sh
@@ -85,9 +87,11 @@ This produces:
 - `./server`
 - `./benchmark`
 
+Use the `make` binaries for local development and manual REPL testing. Use `sh compile.sh` when you need the professor benchmark-compatible command names `./server` and `./benchmark`.
+
 ## Run
 
-### Benchmark Workflow
+### Professor Benchmark Wrapper Workflow
 
 Terminal 1:
 
@@ -135,8 +139,8 @@ Then run the benchmark binary from another terminal:
 Terminal 1:
 
 ```bash
-make flexql_repl
-./server
+make flexql_server flexql_repl
+./flexql_server
 ```
 
 Terminal 2:
