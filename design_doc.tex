@@ -8,6 +8,8 @@
 \usepackage{xcolor}
 \usepackage{hyperref}
 \usepackage{listings}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric}
 
 \hypersetup{
     colorlinks=true,
@@ -21,6 +23,12 @@
     frame=single,
     breaklines=true,
     columns=fullflexible
+}
+
+\tikzset{
+    flowbox/.style={draw, rounded corners, align=center, minimum height=0.85cm, text width=2.35cm, font=\scriptsize},
+    decisionbox/.style={draw, diamond, aspect=2, align=center, text width=1.8cm, font=\scriptsize},
+    flowarrow/.style={-Latex, thick}
 }
 
 \setlist[itemize]{leftmargin=*}
@@ -51,6 +59,28 @@ FlexQL is a lightweight SQL-like client/server database driver implemented fully
 
 The implementation supports \texttt{CREATE TABLE}, \texttt{INSERT}, \texttt{SELECT}, single-condition \texttt{WHERE}, and \texttt{INNER JOIN}.
 
+\section{System Architecture}
+
+\begin{center}
+\begin{tikzpicture}[node distance=0.65cm]
+\node[flowbox] (repl) {REPL client};
+\node[flowbox, right=of repl] (api) {C-style\\client API};
+\node[flowbox, right=of api] (proto) {Length-prefixed\\TCP protocol};
+\node[flowbox, right=of proto] (server) {FlexQL server};
+\node[flowbox, below=of server] (worker) {Per-client\\worker thread};
+\node[flowbox, left=of worker] (engine) {SQL parser and\\execution engine};
+\node[flowbox, left=of engine] (memory) {In-memory tables,\\indexes, cache};
+\node[flowbox, below=of engine] (disk) {WAL and table\\snapshots on disk};
+\draw[flowarrow] (repl) -- (api);
+\draw[flowarrow] (api) -- (proto);
+\draw[flowarrow] (proto) -- (server);
+\draw[flowarrow] (server) -- (worker);
+\draw[flowarrow] (worker) -- (engine);
+\draw[flowarrow] (engine) -- (memory);
+\draw[flowarrow] (engine) -- (disk);
+\end{tikzpicture}
+\end{center}
+
 \section{Storage Design}
 
 \subsection{Row-Major Storage}
@@ -75,6 +105,26 @@ FlexQL persists data in a small WAL-plus-snapshot layout under \texttt{flexql\_d
 
 The write path is:
 
+\begin{center}
+\begin{tikzpicture}[node distance=0.55cm]
+\node[flowbox] (sql) {Mutating SQL\\statement};
+\node[flowbox, right=of sql] (parse) {Parse and\\validate};
+\node[flowbox, right=of parse] (wal) {Append to\\\texttt{wal.log}};
+\node[flowbox, right=of wal] (fsync) {\texttt{fsync}\\WAL entry};
+\node[flowbox, below=of fsync] (memory) {Apply mutation\\in memory};
+\node[flowbox, left=of memory] (dirty) {Mark catalog\\or table dirty};
+\node[flowbox, left=of dirty] (checkpoint) {Atomically\\checkpoint\\snapshots};
+\node[flowbox, left=of checkpoint] (clear) {Clear WAL after\\checkpoint};
+\draw[flowarrow] (sql) -- (parse);
+\draw[flowarrow] (parse) -- (wal);
+\draw[flowarrow] (wal) -- (fsync);
+\draw[flowarrow] (fsync) -- (memory);
+\draw[flowarrow] (memory) -- (dirty);
+\draw[flowarrow] (dirty) -- (checkpoint);
+\draw[flowarrow] (checkpoint) -- (clear);
+\end{tikzpicture}
+\end{center}
+
 \begin{enumerate}
     \item Parse and validate the statement
     \item Append the normalized mutating SQL statement to the WAL and \texttt{fsync} it
@@ -85,6 +135,18 @@ The write path is:
 \end{enumerate}
 
 On restart, the engine loads the catalog and table snapshots first, then replays any remaining WAL entries. This means a crash after the WAL append but before checkpointing is recoverable: the snapshot may be older, but the synced WAL entry is replayed to reconstruct the committed state.
+
+\begin{center}
+\begin{tikzpicture}[node distance=0.8cm]
+\node[flowbox] (restart) {Server restart};
+\node[flowbox, right=of restart] (snapshot) {Load catalog and\\table snapshots};
+\node[flowbox, right=of snapshot] (replay) {Replay remaining\\WAL entries};
+\node[flowbox, right=of replay] (ready) {Rebuild in-memory\\working set};
+\draw[flowarrow] (restart) -- (snapshot);
+\draw[flowarrow] (snapshot) -- (replay);
+\draw[flowarrow] (replay) -- (ready);
+\end{tikzpicture}
+\end{center}
 
 Disk is the durable source of truth. RAM is used only as the active working set: table rows, primary-key hash indexes, and cached \texttt{SELECT} results are loaded and maintained in memory so query execution avoids disk reads on the hot path. This improves assignment-scale latency and keeps the implementation simple, but it means very large tables require enough RAM for their active rows and indexes. The snapshots and WAL make the in-memory state reconstructible after restart, while the LRU query cache remains an optimization only and can be discarded at any time.
 
@@ -176,6 +238,26 @@ Expired rows are removed lazily during future access to the table. This avoids d
 \section{Caching Strategy}
 
 FlexQL uses an LRU result cache for \texttt{SELECT} queries.
+
+\begin{center}
+\begin{tikzpicture}[node distance=0.55cm]
+\node[flowbox] (select) {\texttt{SELECT}\\statement};
+\node[flowbox, right=of select] (normalize) {Normalize\\SQL text};
+\node[decisionbox, right=of normalize] (hit) {Cache\\hit?};
+\node[flowbox, above right=0.4cm and 0.65cm of hit] (cached) {Return cached\\result};
+\node[flowbox, below right=0.4cm and 0.65cm of hit] (execute) {Execute using\\rows and indexes};
+\node[flowbox, right=of execute] (store) {Store result in\\LRU cache};
+\node[flowbox, below=of normalize] (write) {Write or\\expiration purge};
+\node[flowbox, below=of hit] (invalidate) {Invalidate affected\\cached results};
+\draw[flowarrow] (select) -- (normalize);
+\draw[flowarrow] (normalize) -- (hit);
+\draw[flowarrow] (hit) -- node[above, font=\small] {Yes} (cached);
+\draw[flowarrow] (hit) -- node[below, font=\small] {No} (execute);
+\draw[flowarrow] (execute) -- (store);
+\draw[flowarrow] (store) |- (cached);
+\draw[flowarrow] (write) -- (invalidate);
+\end{tikzpicture}
+\end{center}
 
 \begin{itemize}
     \item Cache key: normalized SQL text

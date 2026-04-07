@@ -14,6 +14,19 @@ FlexQL is a lightweight SQL-like client/server database driver implemented fully
 
 The implementation supports `CREATE TABLE`, `INSERT`, `SELECT`, single-condition `WHERE`, and `INNER JOIN`.
 
+## System Architecture
+
+```mermaid
+flowchart LR
+    REPL[REPL client] --> API[C-style client API]
+    API --> PROTO[Length-prefixed TCP protocol]
+    PROTO --> SERVER[FlexQL server]
+    SERVER --> WORKER[Per-client worker thread]
+    WORKER --> ENGINE[SQL parser and execution engine]
+    ENGINE --> MEMORY[In-memory tables, indexes, cache]
+    ENGINE --> DISK[WAL and table snapshots on disk]
+```
+
 ## Storage Design
 
 ### Row-Major Storage
@@ -34,6 +47,17 @@ FlexQL persists data in a small WAL-plus-snapshot layout under `flexql_data/`.
 
 The write path is:
 
+```mermaid
+flowchart TD
+    SQL[Mutating SQL statement] --> PARSE[Parse and validate]
+    PARSE --> WAL[Append normalized statement to wal.log]
+    WAL --> FSYNC[fsync WAL entry]
+    FSYNC --> MEMORY[Apply mutation in memory]
+    MEMORY --> DIRTY[Mark catalog or table dirty]
+    DIRTY --> CHECKPOINT[Atomically checkpoint dirty snapshots]
+    CHECKPOINT --> CLEAR[Clear WAL after checkpoint succeeds]
+```
+
 1. Parse and validate the statement
 2. Append the normalized mutating SQL statement to the WAL and `fsync` it
 3. Apply the mutation in memory
@@ -42,6 +66,13 @@ The write path is:
 6. Clear the WAL only after checkpoint completion
 
 On restart, the engine loads the catalog and table snapshots first, then replays any remaining WAL entries. This means a crash after the WAL append but before checkpointing is recoverable: the snapshot may be older, but the synced WAL entry is replayed to reconstruct the committed state.
+
+```mermaid
+flowchart LR
+    START[Server restart] --> SNAPSHOT[Load catalog and table snapshots]
+    SNAPSHOT --> REPLAY[Replay remaining WAL entries]
+    REPLAY --> READY[Rebuild in-memory working set]
+```
 
 Disk is the durable source of truth. RAM is used only as the active working set: table rows, primary-key hash indexes, and cached `SELECT` results are loaded and maintained in memory so query execution avoids disk reads on the hot path. This improves assignment-scale latency and keeps the implementation simple, but it means very large tables require enough RAM for their active rows and indexes. The snapshots and WAL make the in-memory state reconstructible after restart, while the LRU query cache remains an optimization only and can be discarded at any time.
 
@@ -115,6 +146,17 @@ Expired rows are removed lazily during future access to the table. This avoids d
 ## Caching Strategy
 
 FlexQL uses an LRU result cache for `SELECT` queries.
+
+```mermaid
+flowchart TD
+    SELECT[SELECT statement] --> NORMALIZE[Normalize SQL text]
+    NORMALIZE --> LOOKUP{Cache hit?}
+    LOOKUP -- Yes --> RETURN[Return cached result]
+    LOOKUP -- No --> EXECUTE[Execute query using table rows and indexes]
+    EXECUTE --> STORE[Store complete result in LRU cache]
+    STORE --> RETURN
+    WRITE[CREATE TABLE, INSERT, or expiration purge] --> INVALIDATE[Invalidate affected cached results]
+```
 
 - Cache key: normalized SQL text
 - Cache value: complete query result including columns and rows
